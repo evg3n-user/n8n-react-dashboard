@@ -2,7 +2,7 @@
 
 > AI Automation Specialist | React frontend for n8n workflow management
 
-Built by [Ievgen Gniedko](https://github.com/evg3n-user) — Senior Software Engineer & AI Automation Specialist.
+Built by [evg3n](https://github.com/evg3n-user) — Senior Software Engineer & AI Automation Specialist.
 
 ---
 
