@@ -78,7 +78,7 @@ server.post<{ Params: { id: string } }>(
   '/api/n8n/workflows/:id/activate',
   async (request, reply) => {
     try {
-      const res = await proxyToN8n(`/workflows/${request.params.id}/activate`, 'POST');
+      const res = await proxyToN8n(`/workflows/${request.params.id}/activate`, 'POST', {});
       const data = res.status === 204 ? null : await res.json();
       return reply.status(res.status).send(data);
     } catch (err) {
@@ -93,7 +93,7 @@ server.post<{ Params: { id: string } }>(
   '/api/n8n/workflows/:id/deactivate',
   async (request, reply) => {
     try {
-      const res = await proxyToN8n(`/workflows/${request.params.id}/deactivate`, 'POST');
+      const res = await proxyToN8n(`/workflows/${request.params.id}/deactivate`, 'POST', {});
       const data = res.status === 204 ? null : await res.json();
       return reply.status(res.status).send(data);
     } catch (err) {
