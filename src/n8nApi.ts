@@ -1,12 +1,10 @@
-/** n8n API Key — stored in .env, never commit real keys */
-const N8N_API_KEY = import.meta.env.VITE_N8N_API_KEY || '';
-const N8N_BASE_URL = import.meta.env.VITE_N8N_BASE_URL || 'https://n8n.ghomelab.cc';
+/** Base path for n8n API — proxied through backend */
+const N8N_BASE = '/api/n8n';
 
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${N8N_BASE_URL}/api/v1${path}`, {
+  const res = await fetch(`${N8N_BASE}${path}`, {
     ...options,
     headers: {
-      'X-N8N-API-KEY': N8N_API_KEY,
       'Accept': 'application/json',
       'Content-Type': 'application/json',
       ...options?.headers,

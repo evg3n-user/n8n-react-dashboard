@@ -1,0 +1,20 @@
+{
+  "name": "n8n-dashboard-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node --loader tsx src/index.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.3",
+    "tsx": "^4.21.0",
+    "typescript": "~6.0.2"
+  }
+}
