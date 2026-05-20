@@ -12,6 +12,15 @@ await server.register(cors, {
   origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
 });
 
+// Allow empty JSON body for activate/deactivate POST requests
+server.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => {
+  try {
+    done(null, body === '' ? {} : JSON.parse(body));
+  } catch (err) {
+    done(err as Error, undefined);
+  }
+});
+
 async function proxyToN8n(
   n8nPath: string,
   method: string,
