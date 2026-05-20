@@ -77,14 +77,14 @@ export async function toggleWorkflow(id: string, active: boolean): Promise<void>
 
 /** Fetch recent executions */
 export async function getExecutions(limit = 20): Promise<Execution[]> {
-  const res = await api<ExecutionListResponse>(`/executions?limit=${limit}&orderBy=startedAt:desc`);
+  const res = await api<ExecutionListResponse>(`/executions?limit=${limit}`);
   return res.data || [];
 }
 
 /** Get executions for a specific workflow */
 export async function getWorkflowExecutions(workflowId: string, limit = 10): Promise<Execution[]> {
   const res = await api<ExecutionListResponse>(
-    `/executions?limit=${limit}&workflowId=${workflowId}&orderBy=startedAt:desc`
+    `/executions?limit=${limit}&workflowId=${workflowId}`
   );
   return res.data || [];
 }
