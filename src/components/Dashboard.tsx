@@ -1,186 +1,325 @@
-import { useEffect, useState } from 'react';
-import { getWorkflows, getExecutions, toggleWorkflow } from '../n8nApi';
-import type { Workflow, Execution } from '../n8nApi';
+import { useEffect, useMemo, useState } from 'react';
+import ArtifactViewer from './ArtifactViewer';
+import WorkflowConfigModal, { defaultWorkflowConfig } from './WorkflowConfig';
+import {
+  getExecutions,
+  getWorkflows,
+  pollExecution,
+  toggleWorkflow,
+  triggerWorkflowWithConfig,
+} from '../n8nApi';
+import type {
+  Execution,
+  ExecutionArtifact,
+  TriggerWorkflowResponse,
+  Workflow,
+  WorkflowConfig,
+} from '../n8nApi';
+import type { WorkflowConfigDraft } from './WorkflowConfig';
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleString('en-US', {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    success: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    error: 'bg-red-500/20 text-red-400 border-red-500/30',
-    running: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
-    waiting: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+function statusClass(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === 'success') return 'status-badge status-success';
+  if (normalized === 'error' || normalized === 'crashed') return 'status-badge status-error';
+  if (normalized === 'running') return 'status-badge status-running';
+  if (normalized === 'waiting') return 'status-badge status-waiting';
+  return 'status-badge';
+}
+
+function getWebhookName(workflow: Workflow) {
+  return workflow.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function buildExecutionArtifact(execution: Execution): ExecutionArtifact {
+  return {
+    executionId: execution.id,
+    status: execution.status,
+    finished: execution.finished,
+    startedAt: execution.startedAt,
+    stoppedAt: execution.stoppedAt,
+    workflowId: execution.workflowId,
+    workflowName: execution.workflowName,
+    result: execution,
+    generatedAt: new Date().toISOString(),
   };
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs font-medium border ${colors[status] || 'bg-zinc-700 text-zinc-400 border-zinc-600'}`}>
-      {status}
-    </span>
-  );
+}
+
+function configDraftToPayload(config: WorkflowConfigDraft): WorkflowConfig {
+  return {
+    clientName: config.clientName,
+    reportDate: config.reportDate,
+    dryRun: config.dryRun,
+    includeArtifacts: config.includeArtifacts,
+    priority: config.priority,
+    retryLimit: config.retryLimit,
+    notes: config.notes,
+  };
 }
 
 export default function Dashboard() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [executions, setExecutions] = useState<Execution[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runningWorkflowId, setRunningWorkflowId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'workflows' | 'executions'>('workflows');
+  const [configuredWorkflow, setConfiguredWorkflow] = useState<Workflow | null>(null);
+  const [configDraft, setConfigDraft] = useState<WorkflowConfigDraft>(defaultWorkflowConfig);
+  const [artifactSource, setArtifactSource] = useState<
+    { kind: 'execution'; artifact: ExecutionArtifact } | { kind: 'webhook'; response: TriggerWorkflowResponse } | null
+  >(null);
+
+  const stats = useMemo(() => {
+    const complete = executions.filter(execution => execution.status === 'success').length;
+    const failed = executions.filter(execution => ['error', 'crashed'].includes(execution.status)).length;
+    const running = executions.filter(execution => !execution.finished).length;
+    return { complete, failed, running };
+  }, [executions]);
 
   const fetchData = async () => {
     try {
       setLoading(true);
       setError(null);
-      const [wfs, execs] = await Promise.all([getWorkflows(), getExecutions(15)]);
-      setWorkflows(wfs);
-      // Attach workflow names to executions
-      const wfMap = new Map(wfs.map(w => [w.id, w.name]));
-      setExecutions(execs.map(e => ({ ...e, workflowName: wfMap.get(e.workflowId) || e.workflowId.slice(0, 8) })));
-    } catch (e: any) {
-      setError(e.message || 'Failed to fetch data');
+      const [fetchedWorkflows, fetchedExecutions] = await Promise.all([getWorkflows(), getExecutions(15)]);
+      const workflowMap = new Map(fetchedWorkflows.map(workflow => [workflow.id, workflow.name]));
+      setWorkflows(fetchedWorkflows);
+      setExecutions(
+        fetchedExecutions.map(execution => ({
+          ...execution,
+          workflowName: workflowMap.get(execution.workflowId) ?? execution.workflowId.slice(0, 8),
+        })),
+      );
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Failed to fetch dashboard data');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    void fetchData();
+  }, []);
 
-  const handleToggle = async (wf: Workflow) => {
+  const handleToggle = async (workflow: Workflow) => {
     try {
-      await toggleWorkflow(wf.id, wf.active);
-      fetchData();
-    } catch (e: any) {
-      setError(e.message);
+      setError(null);
+      await toggleWorkflow(workflow.id, workflow.active);
+      await fetchData();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Workflow state change failed');
+    }
+  };
+
+  const openConfig = (workflow: Workflow) => {
+    setConfiguredWorkflow(workflow);
+    setConfigDraft({
+      ...defaultWorkflowConfig,
+      clientName: workflow.name,
+    });
+  };
+
+  const runWithConfig = async (workflow: Workflow, config: WorkflowConfig) => {
+    setRunningWorkflowId(workflow.id);
+    setError(null);
+    try {
+      const response = await triggerWorkflowWithConfig(getWebhookName(workflow), config);
+      const executionId = response.executionId ?? response.id;
+      if (executionId) {
+        const execution = await pollExecution(executionId);
+        setArtifactSource({ kind: 'execution', artifact: buildExecutionArtifact({ ...execution, workflowName: workflow.name }) });
+      } else {
+        setArtifactSource({ kind: 'webhook', response });
+      }
+      setConfiguredWorkflow(null);
+      await fetchData();
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : 'Configured workflow run failed');
+    } finally {
+      setRunningWorkflowId(null);
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-emerald-500"></div>
-      </div>
+      <section className="dashboard-loading" aria-live="polite">
+        <span />
+        <strong>Reading n8n state</strong>
+      </section>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <>
+      <section className="ops-strip" aria-label="Dashboard summary">
+        <div>
+          <span>{workflows.length}</span>
+          <small>workflows</small>
+        </div>
+        <div>
+          <span>{stats.complete}</span>
+          <small>successful</small>
+        </div>
+        <div>
+          <span>{stats.running}</span>
+          <small>running</small>
+        </div>
+        <div>
+          <span>{stats.failed}</span>
+          <small>failed</small>
+        </div>
+      </section>
+
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 text-red-400 px-4 py-3 rounded-lg text-sm flex justify-between">
-          <span>⚠ {error}</span>
-          <button onClick={fetchData} className="underline">Retry</button>
+        <div className="error-banner" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => void fetchData()}>
+            Retry
+          </button>
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-zinc-800/50 rounded-lg p-1 w-fit">
-        <button
-          onClick={() => setActiveTab('workflows')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'workflows' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          ⚡ Workflows ({workflows.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('executions')}
-          className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            activeTab === 'executions' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'
-          }`}
-        >
-          📜 Executions ({executions.length})
-        </button>
-      </div>
+      <section className="workbench">
+        <div className="primary-panel">
+          <div className="panel-toolbar">
+            <div className="tabs" role="tablist" aria-label="Dashboard views">
+              <button
+                type="button"
+                className={activeTab === 'workflows' ? 'tab-active' : ''}
+                onClick={() => setActiveTab('workflows')}
+              >
+                Workflows ({workflows.length})
+              </button>
+              <button
+                type="button"
+                className={activeTab === 'executions' ? 'tab-active' : ''}
+                onClick={() => setActiveTab('executions')}
+              >
+                Executions ({executions.length})
+              </button>
+            </div>
+            <button type="button" className="button button-secondary" onClick={() => void fetchData()}>
+              Refresh
+            </button>
+          </div>
 
-      {/* Workflow List */}
-      {activeTab === 'workflows' && (
-        <div className="grid gap-3">
-          {workflows.length === 0 ? (
-            <div className="text-zinc-500 text-center py-12">No workflows yet. Create one in n8n!</div>
-          ) : (
-            workflows.map(wf => (
-              <div key={wf.id} className="bg-zinc-800/40 border border-zinc-700/50 rounded-xl p-5 hover:border-zinc-600/50 transition-colors">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-white font-medium text-lg">{wf.name}</h3>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={`inline-block w-2 h-2 rounded-full ${wf.active ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`}></span>
-                      <span className="text-sm text-zinc-400">{wf.active ? 'Active' : 'Inactive'}</span>
-                      <span className="text-zinc-600">·</span>
-                      <span className="text-sm text-zinc-500">Updated {formatDate(wf.updatedAt)}</span>
-                    </div>
-                    {wf.tags.length > 0 && (
-                      <div className="flex gap-1 mt-2">
-                        {wf.tags.map(tag => (
-                          <span key={tag.id} className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 text-xs border border-emerald-500/20">
-                            {tag.name}
-                          </span>
-                        ))}
+          {activeTab === 'workflows' && (
+            <div className="workflow-list">
+              {workflows.length === 0 ? (
+                <div className="empty-state">No workflows returned from n8n.</div>
+              ) : (
+                workflows.map(workflow => (
+                  <article key={workflow.id} className="workflow-row">
+                    <div>
+                      <div className="workflow-title">
+                        <span className={workflow.active ? 'dot dot-live' : 'dot'} />
+                        <h2>{workflow.name}</h2>
                       </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => handleToggle(wf)}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      wf.active
-                        ? 'bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20'
-                        : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20'
-                    }`}
-                  >
-                    {wf.active ? '▶ Deactivate' : '▶ Activate'}
-                  </button>
-                </div>
-              </div>
-            ))
+                      <p>
+                        {workflow.active ? 'Active' : 'Inactive'} · Webhook name: {getWebhookName(workflow)} · Updated{' '}
+                        {formatDate(workflow.updatedAt)}
+                      </p>
+                      {workflow.tags.length > 0 && (
+                        <div className="tag-row">
+                          {workflow.tags.map(tag => (
+                            <span key={tag.id}>{tag.name}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="row-actions">
+                      <button type="button" className="button button-secondary" onClick={() => openConfig(workflow)}>
+                        Configure
+                      </button>
+                      <button
+                        type="button"
+                        className="button button-primary"
+                        disabled={runningWorkflowId === workflow.id}
+                        onClick={() => void runWithConfig(workflow, configDraftToPayload(defaultWorkflowConfig))}
+                      >
+                        {runningWorkflowId === workflow.id ? 'Running' : 'Run with params'}
+                      </button>
+                      <button type="button" className="button button-quiet" onClick={() => void handleToggle(workflow)}>
+                        {workflow.active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    </div>
+                  </article>
+                ))
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      {/* Executions List */}
-      {activeTab === 'executions' && (
-        <div className="overflow-x-auto">
-          {executions.length === 0 ? (
-            <div className="text-zinc-500 text-center py-12">No executions yet. Trigger a workflow!</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-zinc-500 text-left border-b border-zinc-700/50">
-                  <th className="pb-3 font-medium">Workflow</th>
-                  <th className="pb-3 font-medium">Status</th>
-                  <th className="pb-3 font-medium">Mode</th>
-                  <th className="pb-3 font-medium">Started</th>
-                  <th className="pb-3 font-medium">Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                {executions.map(exec => {
-                  const duration = exec.stoppedAt
-                    ? Math.round((new Date(exec.stoppedAt).getTime() - new Date(exec.startedAt).getTime()) / 1000)
-                    : null;
-                  return (
-                    <tr key={exec.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors">
-                      <td className="py-3 text-white">{exec.workflowName}</td>
-                      <td className="py-3"><StatusBadge status={exec.status} /></td>
-                      <td className="py-3 text-zinc-400 capitalize">{exec.mode}</td>
-                      <td className="py-3 text-zinc-400">{formatDate(exec.startedAt)}</td>
-                      <td className="py-3 text-zinc-400">{duration !== null ? `${duration}s` : '...'}</td>
+          {activeTab === 'executions' && (
+            <div className="execution-table-wrap">
+              {executions.length === 0 ? (
+                <div className="empty-state">No executions returned from n8n.</div>
+              ) : (
+                <table className="execution-table">
+                  <thead>
+                    <tr>
+                      <th>Workflow</th>
+                      <th>Status</th>
+                      <th>Mode</th>
+                      <th>Started</th>
+                      <th>Duration</th>
+                      <th>Artifact</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {executions.map(execution => {
+                      const duration = execution.stoppedAt
+                        ? Math.round((new Date(execution.stoppedAt).getTime() - new Date(execution.startedAt).getTime()) / 1000)
+                        : null;
+                      return (
+                        <tr key={execution.id}>
+                          <td>{execution.workflowName}</td>
+                          <td>
+                            <span className={statusClass(execution.status)}>{execution.status}</span>
+                          </td>
+                          <td>{execution.mode}</td>
+                          <td>{formatDate(execution.startedAt)}</td>
+                          <td>{duration !== null ? `${duration}s` : 'open'}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-button"
+                              onClick={() => setArtifactSource({ kind: 'execution', artifact: buildExecutionArtifact(execution) })}
+                            >
+                              Inspect
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           )}
         </div>
-      )}
 
-      {/* Refresh */}
-      <button
-        onClick={fetchData}
-        className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-      >
-        ↻ Refresh
-      </button>
-    </div>
+        <ArtifactViewer source={artifactSource} />
+      </section>
+
+      <WorkflowConfigModal
+        workflowName={configuredWorkflow?.name ?? ''}
+        open={configuredWorkflow !== null}
+        value={configDraft}
+        running={runningWorkflowId !== null}
+        onChange={setConfigDraft}
+        onClose={() => setConfiguredWorkflow(null)}
+        onRun={config => {
+          if (configuredWorkflow) void runWithConfig(configuredWorkflow, config);
+        }}
+      />
+    </>
   );
 }

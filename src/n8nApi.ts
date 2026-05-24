@@ -1,6 +1,10 @@
 /** Base path for n8n API — proxied through backend */
 const N8N_BASE = '/api/n8n';
 
+export type WorkflowConfigValue = string | number | boolean;
+export type WorkflowConfig = Record<string, WorkflowConfigValue>;
+export type ArtifactFormat = 'pdf' | 'csv' | 'json';
+
 async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${N8N_BASE}${path}`, {
     ...options,
@@ -30,14 +34,37 @@ export interface Workflow {
 export interface Execution {
   id: string;
   finished: boolean;
-  mode: 'webhook' | 'manual' | 'trigger';
+  mode: 'webhook' | 'manual' | 'trigger' | string;
   retryOf: string | null;
   retrySuccessId: string | null;
   startedAt: string;
-  stoppedAt: string;
+  stoppedAt: string | null;
   workflowId: string;
-  status: 'success' | 'error' | 'running' | 'waiting';
+  status: 'success' | 'error' | 'running' | 'waiting' | string;
   workflowName?: string;
+}
+
+export interface TriggerWorkflowResponse {
+  executionId?: string;
+  id?: string;
+  status?: string;
+  data?: unknown;
+  message?: string;
+  submittedAt: string;
+  webhookName: string;
+  config: WorkflowConfig;
+}
+
+export interface ExecutionArtifact {
+  executionId: string;
+  status: string;
+  finished: boolean;
+  startedAt?: string;
+  stoppedAt?: string | null;
+  workflowId?: string;
+  workflowName?: string;
+  result: unknown;
+  generatedAt: string;
 }
 
 export interface WorkflowListResponse {
@@ -92,4 +119,47 @@ export async function getWorkflowExecutions(workflowId: string, limit = 10): Pro
 /** Delete an execution */
 export async function deleteExecution(id: string): Promise<void> {
   await api(`/executions/${id}`, { method: 'DELETE' });
+}
+
+/** Trigger a workflow through a named webhook with runtime configuration */
+export async function triggerWorkflowWithConfig(
+  webhookName: string,
+  config: WorkflowConfig,
+): Promise<TriggerWorkflowResponse> {
+  return api<TriggerWorkflowResponse>(`/webhook/${encodeURIComponent(webhookName)}`, {
+    method: 'POST',
+    body: JSON.stringify({ config }),
+  });
+}
+
+/** Poll a single execution until it reaches a terminal state or times out */
+export async function pollExecution(
+  executionId: string,
+  options: { intervalMs?: number; timeoutMs?: number } = {},
+): Promise<Execution> {
+  const intervalMs = options.intervalMs ?? 1500;
+  const timeoutMs = options.timeoutMs ?? 30000;
+  const started = Date.now();
+
+  while (Date.now() - started < timeoutMs) {
+    const execution = await api<Execution>(`/executions/${executionId}`);
+    if (execution.finished || ['success', 'error', 'canceled', 'crashed'].includes(execution.status)) {
+      return execution;
+    }
+    await new Promise(resolve => window.setTimeout(resolve, intervalMs));
+  }
+
+  return api<Execution>(`/executions/${executionId}`);
+}
+
+/** Download an execution artifact in a supported format */
+export async function getArtifact(executionId: string, format: ArtifactFormat): Promise<Blob> {
+  const res = await fetch(`${N8N_BASE}/executions/${encodeURIComponent(executionId)}/artifact?format=${format}`, {
+    headers: { Accept: format === 'json' ? 'application/json' : '*/*' },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText })) as { message?: string };
+    throw new Error(err.message || `API error ${res.status}`);
+  }
+  return res.blob();
 }
