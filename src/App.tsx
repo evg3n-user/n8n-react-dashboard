@@ -5,11 +5,8 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <a className="brand-lockup" href="/">
-          <span className="brand-mark">N8</span>
-          <span>
-            <strong>n8n Control Desk</strong>
-            <small>Webhook runs, execution state, export artifacts</small>
-          </span>
+          <span className="brand-mark">n8</span>
+          <strong>n8n Control Desk</strong>
         </a>
         <nav className="top-actions" aria-label="Primary">
           <a href="https://n8n.ghomelab.cc" target="_blank" rel="noopener">
@@ -21,12 +18,9 @@ export default function App() {
 
       <main>
         <section className="hero-band">
-          <div>
-            <p className="eyebrow">Automation console</p>
-            <h1>Run workflows like production jobs.</h1>
-          </div>
+          <h1>Configure and run workflows</h1>
           <p>
-            Configure webhook payloads, watch execution state, and pull artifacts without leaving the dashboard.
+            Set webhook parameters, watch execution state, and download artifacts — all from one dashboard.
           </p>
         </section>
 
