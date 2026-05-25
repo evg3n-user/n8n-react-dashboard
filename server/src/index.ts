@@ -188,6 +188,73 @@ server.get<{ Params: { id: string } }>('/api/n8n/workflows/:id', async (request,
   }
 });
 
+// GET /api/n8n/workflows/:id/trigger-info — detect first trigger node type
+server.get<{ Params: { id: string } }>('/api/n8n/workflows/:id/trigger-info', async (request, reply) => {
+  try {
+    const res = await proxyToN8n(`/workflows/${request.params.id}`, 'GET');
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ message: res.statusText }));
+      return reply.status(res.status).send(data);
+    }
+
+    const workflow: { nodes?: Array<{ name: string; type: string; position: [number, number]; parameters?: Record<string, unknown> }> } = await res.json();
+    const nodes = workflow.nodes ?? [];
+
+    // Filter out non-trigger nodes (sticky notes, regular actions)
+    const triggerTypes = new Set([
+      'n8n-nodes-base.webhook',
+      'n8n-nodes-base.scheduleTrigger',
+      'n8n-nodes-base.manualTrigger',
+      'n8n-nodes-base.formTrigger',
+      'n8n-nodes-base.chatTrigger',
+      'n8n-nodes-base.emailTrigger',
+      'n8n-nodes-base.microsoftTeamsTrigger',
+      'n8n-nodes-base.slackTrigger',
+      'n8n-nodes-base.githubTrigger',
+      'n8n-nodes-base.gitlabTrigger',
+    ]);
+
+    // A trigger node is one whose type matches known triggers
+    // OR whose type ends with 'Trigger' or 'trigger'
+    const isTrigger = (node: { type: string }) =>
+      triggerTypes.has(node.type) || node.type.endsWith('Trigger') || node.type.endsWith('trigger');
+
+    const triggers = nodes.filter(isTrigger);
+
+    // Sort by position (top-left first)
+    triggers.sort((a, b) => a.position[1] - b.position[1] || a.position[0] - b.position[0]);
+
+    if (triggers.length === 0) {
+      return reply.send({ type: 'none', nodeName: null, webhookPath: null, httpMethod: 'POST' });
+    }
+
+    const first = triggers[0];
+    const params = first.parameters ?? {};
+
+    let type = 'unknown';
+    if (first.type === 'n8n-nodes-base.webhook') type = 'webhook';
+    else if (first.type === 'n8n-nodes-base.scheduleTrigger') type = 'schedule';
+    else if (first.type === 'n8n-nodes-base.manualTrigger') type = 'manual';
+    else if (first.type === 'n8n-nodes-base.formTrigger') type = 'form';
+    else if (first.type === 'n8n-nodes-base.chatTrigger') type = 'chat';
+    else if (first.type.endsWith('Trigger') || first.type.endsWith('trigger')) type = 'trigger';
+
+    const webhookPath = type === 'webhook' ? (String(params.path ?? '') || undefined) : undefined;
+    const httpMethod = type === 'webhook' ? (String(params.httpMethod ?? 'POST') || 'POST') : 'POST';
+
+    return reply.send({
+      type,
+      nodeName: first.name,
+      webhookPath,
+      httpMethod,
+      rawType: first.type,
+    });
+  } catch (err) {
+    const e = toN8nError(err);
+    return reply.status(e.status).send({ message: e.message });
+  }
+});
+
 // POST /api/n8n/workflows/:id/activate
 server.post<{ Params: { id: string } }>(
   '/api/n8n/workflows/:id/activate',

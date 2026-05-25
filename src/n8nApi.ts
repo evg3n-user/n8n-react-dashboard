@@ -67,6 +67,14 @@ export interface ExecutionArtifact {
   generatedAt: string;
 }
 
+export interface TriggerInfo {
+  type: 'webhook' | 'schedule' | 'manual' | 'form' | 'chat' | 'trigger' | 'none' | 'unknown';
+  nodeName: string | null;
+  webhookPath: string | null;
+  httpMethod: string;
+  rawType: string;
+}
+
 export interface WorkflowListResponse {
   data: Workflow[];
   count?: number;
@@ -150,6 +158,11 @@ export async function pollExecution(
   }
 
   return api<Execution>(`/executions/${executionId}`);
+}
+
+/** Detect the first trigger node type in a workflow */
+export async function getTriggerInfo(workflowId: string): Promise<TriggerInfo> {
+  return api<TriggerInfo>(`/workflows/${encodeURIComponent(workflowId)}/trigger-info`);
 }
 
 /** Download an execution artifact in a supported format */

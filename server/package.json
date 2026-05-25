@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "npx --yes tsx watch src/index.ts",
     "start": "node --loader tsx src/index.ts"
   },
   "dependencies": {
